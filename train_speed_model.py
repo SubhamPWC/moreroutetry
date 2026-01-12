@@ -7,7 +7,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 import joblib
-import os
 
 np.random.seed(42)
 
@@ -28,7 +27,6 @@ except Exception:
     # synthetic true speed with noise & penalties
     true_speed = base_speed - 5*is_bridge - 0.005*(np.clip(length_m,0,10000)) + np.random.normal(0,4,size=n)
     df = pd.DataFrame({'highway':hw,'length_m':length_m,'is_bridge':is_bridge,'speed_kph':true_speed})
-    os.makedirs('sample_data', exist_ok=True)
     df.to_csv('sample_data/synthetic_speed_samples.csv', index=False)
 
 # Encode highway to ordinal
