@@ -1,4 +1,5 @@
 
+# optimization.py
 import os
 from typing import Dict, Tuple, List, Optional
 import networkx as nx
@@ -15,37 +16,18 @@ from shapely.geometry import LineString, Polygon
 from shapely.affinity import scale as shp_scale
 
 DEFAULT_SPEED_KPH_BY_HIGHWAY = {
-    "motorway": 90,
-    "trunk": 80,
-    "primary": 60,
-    "secondary": 50,
-    "tertiary": 40,
-    "unclassified": 35,
-    "residential": 30,
-    "service": 25,
-    "motorway_link": 60,
-    "trunk_link": 50,
-    "primary_link": 45,
-    "secondary_link": 35,
-    "tertiary_link": 30,
+    "motorway": 90, "trunk": 80, "primary": 60, "secondary": 50, "tertiary": 40,
+    "unclassified": 35, "residential": 30, "service": 25,
+    "motorway_link": 60, "trunk_link": 50, "primary_link": 45,
+    "secondary_link": 35, "tertiary_link": 30,
 }
 
 EPS = 1e-6  # strictly positive lower bound for edge weights
 
-# ------------------
-# Corridor builder (correct lon/lat + metric-like buffer)
-# ------------------
-def _build_corridor_polygon(
-    origin: Tuple[float, float], dest: Tuple[float, float], width_km: float = 60.0
-) -> Polygon:
-    """
-    Build a buffered corridor polygon around the straight line between origin and dest.
-    Inputs are (lat, lon). Shapely expects (lon, lat). To approximate metric buffering,
-    scale x by cos(mean_lat), buffer in degrees, then unscale.
-    """
+def _build_corridor_polygon(origin: Tuple[float, float], dest: Tuple[float, float], width_km: float = 60.0) -> Polygon:
     lat1, lon1 = origin
     lat2, lon2 = dest
-    line = LineString([(lon1, lat1), (lon2, lat2)])  # (x=lon, y=lat)
+    line = LineString([(lon1, lat1), (lon2, lat2)])  # x=lon, y=lat
     mean_lat = (lat1 + lat2) / 2.0
     xfact = float(np.cos(np.radians(mean_lat)))
     line_scaled = shp_scale(line, xfact=xfact, yfact=1.0, origin=(0.0, 0.0))
@@ -54,22 +36,12 @@ def _build_corridor_polygon(
     corridor = shp_scale(corridor_scaled, xfact=1.0 / xfact, yfact=1.0, origin=(0.0, 0.0))
     return corridor
 
-def load_graph(
-    origin: Tuple[float, float],
-    dest: Tuple[float, float],
-    use_offline_demo: bool = False,
-    corridor_width_km: float = 60.0,
-) -> Tuple[nx.MultiDiGraph, str]:
-    """
-    Load road graph from OSM within a buffered corridor polygon between origin and dest.
-    Returns (G, data_source).
-    """
+def load_graph(origin: Tuple[float, float], dest: Tuple[float, float], use_offline_demo: bool=False, corridor_width_km: float = 60.0) -> Tuple[nx.MultiDiGraph, str]:
     if use_offline_demo or not OSMNX_AVAILABLE:
         return _build_demo_graph(origin, dest), "offline-demo"
-
     try:
         corridor = _build_corridor_polygon(origin, dest, width_km=corridor_width_km)
-        G = ox.graph_from_polygon(corridor, network_type="drive")
+        G = ox.graph_from_polygon(corridor, network_type='drive')
         G = ox.add_edge_lengths(G)
         return G, "osm-corridor"
     except Exception:
@@ -91,19 +63,11 @@ def _build_demo_graph(origin, dest):
         G.add_node(nid, **attrs)
 
     def add_edge(u, v, length_km, name, highway, maxspeed_kph, is_flyover=False):
-        G.add_edge(
-            u,
-            v,
-            key=len(G.edges()),
-            length=length_km * 1000,
-            name=name,
-            highway=highway,
-            maxspeed=maxspeed_kph,
-            bridge="yes" if is_flyover else None,
-        )
+        G.add_edge(u, v, key=len(G.edges()),
+                   length=length_km*1000, name=name, highway=highway,
+                   maxspeed=maxspeed_kph, bridge='yes' if is_flyover else None)
 
-    # demo edges
-    add_edge(1, 8, 4.5, "Vidyasagar Setu Flyover", "primary", 60, is_flyover=True)
+    add_edge(1, 8, 4.5, "Vidyasagar Setu Flyover", "primary", 60, True)
     add_edge(8, 2, 10.0, "Kona Expressway", "trunk", 80)
     add_edge(2, 3, 20.0, "NH16", "motorway", 90)
     add_edge(3, 4, 120.0, "NH16", "motorway", 90)
@@ -119,71 +83,46 @@ def _build_demo_graph(origin, dest):
     return G
 
 def _edge_speed_kph(data, speed_model=None):
-    speed = None
-    if isinstance(data.get("maxspeed"), (int, float)):
-        speed = float(data["maxspeed"])
-    else:
-        hw = data.get("highway")
-        if isinstance(hw, list):
-            hw = hw[0]
+    speed = float(data.get('maxspeed')) if isinstance(data.get('maxspeed'), (int, float)) else None
+    if speed is None:
+        hw = data.get('highway')
+        if isinstance(hw, list): hw = hw[0]
         speed = DEFAULT_SPEED_KPH_BY_HIGHWAY.get(hw, 35)
     if speed_model is not None:
-        hw = data.get("highway")
-        if isinstance(hw, list):
-            hw = hw[0]
-        is_bridge = 1 if (data.get("bridge") in ["yes", True]) else 0
-        length_m = float(data.get("length", 0.0))
-        X = pd.DataFrame([{"length_m": length_m, "is_bridge": is_bridge, "highway": hw}])
-        X["highway_code"] = X["highway"].map(
-            {
-                "motorway": 6,
-                "trunk": 5,
-                "primary": 4,
-                "secondary": 3,
-                "tertiary": 2,
-                "residential": 1,
-                "service": 0,
-                "unclassified": 1,
-                "motorway_link": 4,
-                "primary_link": 3,
-                "secondary_link": 2,
-                "tertiary_link": 2,
-            }
-        ).fillna(1)
-        X_model = X[["length_m", "is_bridge", "highway_code"]]
+        hw = data.get('highway')
+        if isinstance(hw, list): hw = hw[0]
+        is_bridge = 1 if (data.get('bridge') in ['yes', True]) else 0
+        length_m = float(data.get('length', 0.0))
+        X = pd.DataFrame([{ 'length_m': length_m, 'is_bridge': is_bridge, 'highway': hw }])
+        X['highway_code'] = X['highway'].map({
+            'motorway': 6, 'trunk': 5, 'primary': 4, 'secondary': 3, 'tertiary': 2,
+            'residential': 1, 'service': 0, 'unclassified': 1,
+            'motorway_link': 4, 'primary_link': 3, 'secondary_link': 2, 'tertiary_link': 2
+        }).fillna(1)
+        X_model = X[['length_m', 'is_bridge', 'highway_code']]
         try:
             speed_pred = float(speed_model.predict(X_model)[0])
-            speed = 0.6 * speed + 0.4 * max(15.0, min(100.0, speed_pred))
+            speed = 0.6*speed + 0.4*max(15.0, min(100.0, speed_pred))
         except Exception:
             pass
     return speed
 
-def _edge_weight(
-    data,
-    fuel_price_inr_per_l,
-    fuel_consumption_l_per_100km,
-    emission_factor_g_co2_per_km,
-    prefer_highways,
-    avoid_bridges_flyovers,
-    speed_model,
-):
-    highway = data.get("highway")
-    if isinstance(highway, list):
-        highway = highway[0]
-    is_bridge = data.get("bridge") in ["yes", True]
-    length_m = float(data.get("length", 0.0))
+def _edge_weight(data, fuel_price_inr_per_l, fuel_consumption_l_per_100km, emission_factor_g_co2_per_km,
+                 prefer_highways, avoid_bridges_flyovers, speed_model):
+    highway = data.get('highway')
+    if isinstance(highway, list): highway = highway[0]
+    is_bridge = (data.get('bridge') in ['yes', True])
+    length_m = float(data.get('length', 0.0))
     speed_kph = _edge_speed_kph(data, speed_model)
-    travel_time_min = (length_m / 1000.0) / max(5.0, speed_kph) * 60.0
-    cost_inr = (length_m / 1000.0) * (fuel_consumption_l_per_100km / 100.0) * fuel_price_inr_per_l
-    emissions_kg = (length_m / 1000.0) * (emission_factor_g_co2_per_km / 1000.0)
+    travel_time_min = (length_m/1000.0) / max(5.0, speed_kph) * 60.0
+    cost_inr = (length_m/1000.0) * (fuel_consumption_l_per_100km/100.0) * fuel_price_inr_per_l
+    emissions_kg = (length_m/1000.0) * (emission_factor_g_co2_per_km/1000.0)
 
-    base_weight = travel_time_min + 0.001 * length_m + 0.0002 * cost_inr + 0.0002 * emissions_kg
-
+    base_weight = travel_time_min + 0.001*length_m + 0.0002*cost_inr + 0.0002*emissions_kg
     if prefer_highways and highway in ["motorway", "trunk"]:
         base_weight *= 0.97
     if avoid_bridges_flyovers and is_bridge:
         base_weight *= 1.10
-
     return max(base_weight, EPS)
 
 def _collapse_to_digraph(G_multi: nx.MultiDiGraph, weight_func) -> nx.DiGraph:
@@ -192,8 +131,7 @@ def _collapse_to_digraph(G_multi: nx.MultiDiGraph, weight_func) -> nx.DiGraph:
         DG.add_node(n, **attrs)
     for u, v in G_multi.edges():
         edges = G_multi.get_edge_data(u, v)
-        if not edges:
-            continue
+        if not edges: continue
         best_data = None
         best_w = None
         for k, d in edges.items():
@@ -205,21 +143,14 @@ def _collapse_to_digraph(G_multi: nx.MultiDiGraph, weight_func) -> nx.DiGraph:
             DG.add_edge(u, v, **best_data)
     return DG
 
-def compute_candidate_routes(
-    G,
-    origin: Tuple[float, float],
-    dest: Tuple[float, float],
-    k: int = 10,
-    fuel_price_inr_per_l: float = 105.0,
-    fuel_consumption_l_per_100km: float = 6.5,
-    emission_factor_g_co2_per_km: float = 170.0,
-    prefer_highways: bool = True,
-    avoid_bridges_flyovers: bool = False,
-    speed_model_path: Optional[str] = None,
-) -> List[Dict]:
+def compute_candidate_routes(G, origin, dest, k=10,
+                             fuel_price_inr_per_l=105.0,
+                             fuel_consumption_l_per_100km=6.5,
+                             emission_factor_g_co2_per_km=170.0,
+                             prefer_highways=True, avoid_bridges_flyovers=False,
+                             speed_model_path=None) -> List[Dict]:
     data_source = None
-    if isinstance(G, tuple):
-        G, data_source = G
+    if isinstance(G, tuple): G, data_source = G
 
     speed_model = None
     if speed_model_path and os.path.exists(speed_model_path):
@@ -230,20 +161,11 @@ def compute_candidate_routes(
             speed_model = None
 
     def weight_data(d):
-        return _edge_weight(
-            d,
-            fuel_price_inr_per_l,
-            fuel_consumption_l_per_100km,
-            emission_factor_g_co2_per_km,
-            prefer_highways,
-            avoid_bridges_flyovers,
-            speed_model,
-        )
+        return _edge_weight(d, fuel_price_inr_per_l, fuel_consumption_l_per_100km,
+                            emission_factor_g_co2_per_km, prefer_highways,
+                            avoid_bridges_flyovers, speed_model)
 
-    if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
-        DG = _collapse_to_digraph(G, weight_data)
-    else:
-        DG = G
+    DG = _collapse_to_digraph(G, weight_data) if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)) else G
     for _, _, d in DG.edges(data=True):
         d["route_weight"] = weight_data(d)
 
@@ -251,157 +173,93 @@ def compute_candidate_routes(
         origin_node = ox.nearest_nodes(DG, origin[1], origin[0]) if OSMNX_AVAILABLE else list(DG.nodes())[0]
         dest_node = ox.nearest_nodes(DG, dest[1], dest[0]) if OSMNX_AVAILABLE else list(DG.nodes())[-1]
     except Exception:
-        origin_node = list(DG.nodes())[0]
-        dest_node = list(DG.nodes())[-1]
+        origin_node = list(DG.nodes())[0]; dest_node = list(DG.nodes())[-1]
 
     try:
-        paths_gen = nx.shortest_simple_paths(DG, origin_node, dest_node, weight="route_weight")
+        paths_gen = nx.shortest_simple_paths(DG, origin_node, dest_node, weight='route_weight')
     except nx.NetworkXNoPath:
         return []
 
     routes = []
     for i, path in enumerate(paths_gen):
-        if i >= k:
-            break
+        if i >= k: break
         segments = []
-        total_length_m = 0.0
-        total_time_min = 0.0
-        total_cost_inr = 0.0
-        total_emissions_kg = 0.0
-        num_flyovers = 0
-        highway_len_m = 0.0
+        total_length_m = total_time_min = total_cost_inr = total_emissions_kg = 0.0
+        num_flyovers = 0; highway_len_m = 0.0
 
         for u, v in zip(path[:-1], path[1:]):
-            if DG.has_edge(u, v):
-                data = DG.get_edge_data(u, v)
-            else:
-                data = {"length": 0.0, "name": None, "highway": None, "maxspeed": None}
-
-            name = data.get("name") or "Unnamed road"
-            highway = data.get("highway")
-            if isinstance(highway, list):
-                highway = highway[0]
-            length_m = float(data.get("length", 0.0))
+            data = DG.get_edge_data(u, v) if DG.has_edge(u, v) else {"length": 0.0, "name": None, "highway": None, "maxspeed": None}
+            name = data.get('name') or 'Unnamed road'
+            highway = data.get('highway'); highway = highway[0] if isinstance(highway, list) else highway
+            length_m = float(data.get('length', 0.0))
             maxspeed_kph = _edge_speed_kph(data, speed_model)
-            travel_time_min = (length_m / 1000.0) / max(5.0, maxspeed_kph) * 60.0
-            cost_inr = (length_m / 1000.0) * (fuel_consumption_l_per_100km / 100.0) * fuel_price_inr_per_l
-            emissions_kg = (length_m / 1000.0) * (emission_factor_g_co2_per_km / 1000.0)
-            is_flyover = (data.get("bridge") in ["yes", True]) or ("flyover" in str(name).lower())
+            travel_time_min = (length_m/1000.0) / max(5.0, maxspeed_kph) * 60.0
+            cost_inr = (length_m/1000.0) * (fuel_consumption_l_per_100km/100.0) * fuel_price_inr_per_l
+            emissions_kg = (length_m/1000.0) * (emission_factor_g_co2_per_km/1000.0)
+            is_flyover = (data.get('bridge') in ['yes', True]) or ('flyover' in str(name).lower())
 
-            u_lat = float(DG.nodes[u].get("y"))
-            u_lon = float(DG.nodes[u].get("x"))
-            v_lat = float(DG.nodes[v].get("y"))
-            v_lon = float(DG.nodes[v].get("x"))
+            u_lat, u_lon = float(DG.nodes[u].get('y')), float(DG.nodes[u].get('x'))
+            v_lat, v_lon = float(DG.nodes[v].get('y')), float(DG.nodes[v].get('x'))
+            segments.append({
+                "u": u, "v": v, "u_lat": u_lat, "u_lon": u_lon, "v_lat": v_lat, "v_lon": v_lon,
+                "name": name, "highway": highway, "length_m": length_m, "maxspeed_kph": maxspeed_kph,
+                "travel_time_min": travel_time_min, "cost_inr": cost_inr, "emissions_kg": emissions_kg,
+                "is_flyover": is_flyover,
+            })
 
-            segments.append(
-                {
-                    "u": u,
-                    "v": v,
-                    "u_lat": u_lat,
-                    "u_lon": u_lon,
-                    "v_lat": v_lat,
-                    "v_lon": v_lon,
-                    "name": name,
-                    "highway": highway,
-                    "length_m": length_m,
-                    "maxspeed_kph": maxspeed_kph,
-                    "travel_time_min": travel_time_min,
-                    "cost_inr": cost_inr,
-                    "emissions_kg": emissions_kg,
-                    "is_flyover": is_flyover,
-                }
-            )
+            total_length_m += length_m; total_time_min += travel_time_min
+            total_cost_inr += cost_inr; total_emissions_kg += emissions_kg
+            if is_flyover: num_flyovers += 1
+            if highway in ["motorway", "trunk"]: highway_len_m += length_m
 
-            total_length_m += length_m
-            total_time_min += travel_time_min
-            total_cost_inr += cost_inr
-            total_emissions_kg += emissions_kg
-            if is_flyover:
-                num_flyovers += 1
-            if highway in ["motorway", "trunk"]:
-                highway_len_m += length_m
-
-        routes.append(
-            {
-                "route_id": i + 1,
-                "path": path,
-                "segments": segments,
-                "total_distance_km": total_length_m / 1000.0,
-                "total_time_min": total_time_min,
-                "total_cost_inr": total_cost_inr,
-                "total_emissions_kg": total_emissions_kg,
-                "num_segments": len(segments),
-                "has_flyover": num_flyovers > 0,
-                "highway_share_pct": (highway_len_m / total_length_m * 100.0) if total_length_m > 0 else 0.0,
-                "data_source": data_source or ("osm" if OSMNX_AVAILABLE else "demo"),
-            }
-        )
-
+        routes.append({
+            "route_id": i+1, "path": path, "segments": segments,
+            "total_distance_km": total_length_m/1000.0, "total_time_min": total_time_min,
+            "total_cost_inr": total_cost_inr, "total_emissions_kg": total_emissions_kg,
+            "num_segments": len(segments), "has_flyover": num_flyovers > 0,
+            "highway_share_pct": (highway_len_m/total_length_m*100.0) if total_length_m>0 else 0.0,
+            "data_source": data_source or ("osm" if OSMNX_AVAILABLE else "demo"),
+        })
     return routes
 
 def summarize_routes(routes: List[Dict]) -> pd.DataFrame:
     df = pd.DataFrame(routes)
-    if df.empty:
-        return df
+    if df.empty: return df
     metrics = df[["total_distance_km", "total_time_min", "total_cost_inr", "total_emissions_kg"]].values
-    ranks = _pareto_ranks(metrics)
-    df["dominance_rank"] = ranks
-    df["optimized"] = ["candidate" for _ in range(len(df))]
+    ranks = _pareto_ranks(metrics); df['dominance_rank'] = ranks; df['optimized'] = ["candidate"]*len(df)
     return df
 
 def recommend_route(df_routes: pd.DataFrame, objective: str):
-    if df_routes is None or len(df_routes) == 0:
-        return 0, "optimized:none (no routes)"
-    idx = 0
-    tag = "optimized:balanced"
-    if objective == "pareto":
-        df_nd = df_routes[df_routes["dominance_rank"] == 0].copy()
-        if df_nd.empty:
-            df_nd = df_routes.copy()
+    if df_routes is None or len(df_routes) == 0: return 0, "optimized:none (no routes)"
+    idx = 0; tag = "optimized:balanced"
+    if objective == 'pareto':
+        df_nd = df_routes[df_routes['dominance_rank']==0].copy()
+        if df_nd.empty: df_nd = df_routes.copy()
         idx_rel, tag_bal = _best_balanced_index(df_nd)
-        idx = df_nd.index[idx_rel]
-        tag = f"optimized:pareto-balanced (nondominated set size={len(df_nd)})"
-    elif objective in ["min_distance", "min_time", "min_cost", "min_emissions"]:
-        col_map = {
-            "min_distance": "total_distance_km",
-            "min_time": "total_time_min",
-            "min_cost": "total_cost_inr",
-            "min_emissions": "total_emissions_kg",
-        }
-        col = col_map[objective]
-        idx = int(df_routes[col].idxmin())
-        tag = f"optimized:{objective}"
+        idx = df_nd.index[idx_rel]; tag = f"optimized:pareto-balanced (nondominated set size={len(df_nd)})"
+    elif objective in ['min_distance', 'min_time', 'min_cost', 'min_emissions']:
+        m = {'min_distance':'total_distance_km','min_time':'total_time_min','min_cost':'total_cost_inr','min_emissions':'total_emissions_kg'}
+        idx = int(df_routes[m[objective]].idxmin()); tag = f"optimized:{objective}"
     else:
-        idx, tag = _best_balanced_index(df_routes)
-        tag = "optimized:balanced"
-
-    df_routes.loc[:, "optimized"] = "candidate"
-    df_routes.loc[idx, "optimized"] = "recommended"
+        idx, tag = _best_balanced_index(df_routes); tag = "optimized:balanced"
+    df_routes.loc[:, 'optimized'] = 'candidate'; df_routes.loc[idx, 'optimized'] = 'recommended'
     return idx, tag
 
 def _best_balanced_index(df: pd.DataFrame):
     cols = ["total_distance_km", "total_time_min", "total_cost_inr", "total_emissions_kg"]
-    X = df[cols].values.astype(float)
-    mins = X.min(axis=0)
-    maxs = X.max(axis=0)
+    X = df[cols].values.astype(float); mins = X.min(axis=0); maxs = X.max(axis=0)
     denom = np.where((maxs - mins) == 0, 1.0, (maxs - mins))
-    Xn = (X - mins) / denom
-    scores = Xn.sum(axis=1)
-    idx_rel = int(np.argmin(scores))
-    tag = f"optimized:balanced(score={scores[idx_rel]:.3f})"
+    scores = ((X - mins) / denom).sum(axis=1)
+    idx_rel = int(np.argmin(scores)); tag = f"optimized:balanced(score={scores[idx_rel]:.3f})"
     return idx_rel, tag
 
 def _pareto_ranks(values: np.ndarray) -> List[int]:
-    n = values.shape[0]
-    ranks = np.zeros(n, dtype=int)
+    n = values.shape[0]; ranks = np.zeros(n, dtype=int)
     for i in range(n):
         dominated = False
         for j in range(n):
-            if i == j:
-                continue
+            if i == j: continue
             if np.all(values[j] <= values[i]) and np.any(values[j] < values[i]):
-                dominated = True
-                break
+                dominated = True; break
         ranks[i] = 0 if not dominated else 1
     return ranks.tolist()
-``
