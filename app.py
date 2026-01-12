@@ -83,6 +83,12 @@ emission_factor_g_co2_per_km = st.sidebar.number_input("Emission factor (g CO₂
 prefer_highways = st.sidebar.checkbox("Prefer highways", value=True)
 avoid_bridges_flyovers = st.sidebar.checkbox("Avoid bridges / flyovers", value=False)
 
+st.sidebar.header("Corridor (OSM Fetch)")
+corridor_width_km = st.sidebar.slider("Corridor width (km)", min_value=10, max_value=150, value=60, step=5,
+                                     help="Width of the buffered corridor used to fetch OSM roads between origin and destination.")
+corridor_steps = st.sidebar.slider("Corridor steps", min_value=4, max_value=24, value=12,
+                                  help="More steps increase accuracy for long trips but use more data.")
+
 st.sidebar.header("ML Speed Model (Optional)")
 speed_model_path = st.sidebar.text_input(
     "Speed model file (models/speed_model.pkl)", value="models/speed_model.pkl",
@@ -91,9 +97,10 @@ speed_model_path = st.sidebar.text_input(
 
 # Run optimization
 with st.spinner("Loading road network and computing candidate routes..."):
-    G = load_graph(origin, dest, use_offline_demo=use_offline_demo)
+    G, source = load_graph(origin, dest, use_offline_demo=use_offline_demo,
+                           corridor_width_km=corridor_width_km, corridor_steps=corridor_steps)
     routes = compute_candidate_routes(
-        G,
+        (G, source),
         origin,
         dest,
         k=k_routes,
@@ -106,6 +113,14 @@ with st.spinner("Loading road network and computing candidate routes..."):
     )
     df_routes = summarize_routes(routes)
     recommended_idx, decision_tag = recommend_route(df_routes, objective)
+
+# Data source banner
+if routes:
+    src = routes[0].get('data_source', source)
+    if src.startswith('osm'):
+        st.success(f"Data source: OpenStreetMap corridor (width={corridor_width_km} km, steps={corridor_steps}).")
+    else:
+        st.warning("Data source: Offline demo graph (synthetic). Disable 'Offline Demo' and ensure internet for real roads.")
 
 # Show filters and outputs
 col1, col2 = st.columns([0.55, 0.45])
@@ -130,13 +145,13 @@ with col2:
                 "highway_share_pct",
                 "has_flyover",
                 "dominance_rank",
-            ]].style.highlight_max(subset=["total_distance_km", "total_time_min", "total_cost_inr", "total_emissions_kg"], color="#ffe0e0")
+            ]].style.highlight_min(subset=["total_distance_km", "total_time_min", "total_cost_inr", "total_emissions_kg"], color="#e0ffe0")
         )
 
         csv_data = df_routes.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Download routes CSV", csv_data, file_name="routes_{}_to_{}.csv".format(origin_name, dest_name), mime="text/csv")
     else:
-        st.info("No routes found for the selected inputs. Try increasing k or changing preferences.")
+        st.info("No routes found for the selected inputs. Try increasing k, corridor width/steps, or changing preferences.")
 
 # Show detailed segment table for the recommended route
 st.subheader("🔎 Recommended Route Details")
@@ -153,8 +168,8 @@ else:
 # Footer info
 with st.expander("ℹ️ Notes"):
     st.markdown("""
-    - **Data source**: When online, roads & names are fetched from OpenStreetMap via OSMnx. In offline demo, a small synthetic graph is used for illustration.
-    - **Optimization**: Multi-criteria (distance, time, cost, emissions). Recommended route is chosen by selected objective, or balanced by normalized scores.
+    - **Data source**: When online, roads & names are fetched from OpenStreetMap via OSMnx using a buffered corridor between origin and destination. In offline demo, a small synthetic graph is used.
+    - **Optimization**: Multi-criteria (distance, time, cost, emissions). Recommended route adjusts immediately based on the selected primary objective.
     - **ML**: Optional scikit-learn model can adjust segment speeds using road attributes if you provide `models/speed_model.pkl`.
     - **Flyover detection**: Based on OSM tags like `bridge=yes` or segment name containing 'Flyover'.
     """)
