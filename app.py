@@ -15,7 +15,41 @@ st.title("🚗 Road Route Optimization (India) — Distance · Time · Cost · E
 st.caption("Not using Google Maps. Uses OpenStreetMap via OSMnx when online; includes an offline demo graph.")
 
 # --- Static origin/destination choices (lat, lon) ---
-STATIC_POINTS = {STATIC_POINTS_LITERAL}
+STATIC_POINTS = {
+    "Kolkata": (22.5726, 88.3639),
+    "Bhubaneswar": (20.2961, 85.8245),
+    "Ranchi": (23.3441, 85.3096),
+    "Patna": (25.5941, 85.1376),
+    "Delhi": (28.6139, 77.2090),
+    "Mumbai": (19.0760, 72.8777),
+    "Bengaluru": (12.9716, 77.5946),
+    "Hyderabad": (17.3850, 78.4867),
+    "Chennai": (13.0827, 80.2707),
+    "Pune": (18.5204, 73.8567),
+    "Ahmedabad": (23.0225, 72.5714),
+    "Jaipur": (26.9124, 75.7873),
+    "Surat": (21.1702, 72.8311),
+    "Lucknow": (26.8467, 80.9462),
+    "Kanpur": (26.4499, 80.3319),
+    "Nagpur": (21.1458, 79.0882),
+    "Indore": (22.7196, 75.8577),
+    "Bhopal": (23.2599, 77.4126),
+    "Coimbatore": (11.0168, 76.9558),
+    "Kochi": (9.9312, 76.2673),
+    "Thiruvananthapuram": (8.5241, 76.9366),
+    "Visakhapatnam": (17.6868, 83.2185),
+    "Vijayawada": (16.5062, 80.6480),
+    "Guwahati": (26.1158, 91.7086),
+    "Siliguri": (26.7271, 88.3953),
+    "Durgapur": (23.5204, 87.3119),
+    "Asansol": (23.6838, 86.9536),
+    "Jamshedpur": (22.8046, 86.2029),
+    "Dhanbad": (23.7957, 86.4300),
+    "Cuttack": (20.4625, 85.8828),
+    "Puri": (19.8135, 85.8312),
+    "Gaya": (24.7925, 85.0078),
+    "Varanasi": (25.3176, 82.9739),
+}
 
 # Sidebar controls
 st.sidebar.header("Route Inputs")
