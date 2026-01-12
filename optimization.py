@@ -33,13 +33,11 @@ DEFAULT_SPEED_KPH_BY_HIGHWAY = {
 
 EPS = 1e-6  # strictly positive lower bound for edge weights
 
-
 def _width_degrees(width_km: float, lat_deg: float) -> Tuple[float, float]:
     # approximate conversion: 1 deg latitude ≈ 111 km; longitude scales by cos(latitude)
     lat_deg_width = width_km / 111.0
     lon_deg_width = width_km / (111.0 * max(0.2, abs(np.cos(np.radians(lat_deg)))))
     return lat_deg_width, lon_deg_width
-
 
 def _build_corridor_polygon(origin: Tuple[float, float], dest: Tuple[float, float], width_km: float = 50.0, steps: int = 12):
     lat1, lon1 = origin
@@ -55,7 +53,6 @@ def _build_corridor_polygon(origin: Tuple[float, float], dest: Tuple[float, floa
         ])
         polys.append(poly)
     return unary_union(polys)
-
 
 def load_graph(origin: Tuple[float, float], dest: Tuple[float, float], use_offline_demo: bool=False,
                corridor_width_km: float = 50.0, corridor_steps: int = 12):
@@ -74,7 +71,6 @@ def load_graph(origin: Tuple[float, float], dest: Tuple[float, float], use_offli
         return G, "osm-corridor"
     except Exception:
         return _build_demo_graph(origin, dest), "offline-demo-fallback"
-
 
 def _build_demo_graph(origin, dest):
     G = nx.MultiDiGraph()
@@ -123,7 +119,6 @@ def _build_demo_graph(origin, dest):
 
     return G
 
-
 def _edge_speed_kph(data, speed_model=None):
     speed = None
     if isinstance(data.get('maxspeed'), (int, float)):
@@ -150,7 +145,6 @@ def _edge_speed_kph(data, speed_model=None):
             pass
     return speed
 
-
 def _edge_weight(data, fuel_price_inr_per_l, fuel_consumption_l_per_100km, emission_factor_g_co2_per_km,
                  prefer_highways, avoid_bridges_flyovers, speed_model):
     highway = data.get('highway')
@@ -165,12 +159,11 @@ def _edge_weight(data, fuel_price_inr_per_l, fuel_consumption_l_per_100km, emiss
     base_weight = travel_time_min + 0.001*length_m + 0.0002*cost_inr + 0.0002*emissions_kg
 
     if prefer_highways and highway in ["motorway", "trunk"]:
-        base_weight *= 0.97
+        base_weight *= 0.97  # 3% preference
     if avoid_bridges_flyovers and is_bridge:
-        base_weight *= 1.10
+        base_weight *= 1.10  # 10% penalty
 
     return max(base_weight, EPS)
-
 
 def _collapse_to_digraph(G_multi: nx.MultiDiGraph, weight_func) -> nx.DiGraph:
     DG = nx.DiGraph()
@@ -190,7 +183,6 @@ def _collapse_to_digraph(G_multi: nx.MultiDiGraph, weight_func) -> nx.DiGraph:
             DG.add_edge(u, v, **best_data)
     return DG
 
-
 def compute_candidate_routes(
     G,
     origin: Tuple[float, float],
@@ -206,7 +198,7 @@ def compute_candidate_routes(
     """Compute up to k candidate routes and annotate metrics & segments.
     Returns list of route dicts with per-edge segments and totals.
     """
-    # If load_graph returned (G, source), adapt here: allow passing either graph alone or tuple.
+    # Allow passing either graph alone or (graph, source)
     data_source = None
     if isinstance(G, tuple):
         G, data_source = G
@@ -324,7 +316,6 @@ def compute_candidate_routes(
 
     return routes
 
-
 def summarize_routes(routes: List[Dict]) -> pd.DataFrame:
     df = pd.DataFrame(routes)
     if df.empty:
@@ -334,7 +325,6 @@ def summarize_routes(routes: List[Dict]) -> pd.DataFrame:
     df['dominance_rank'] = ranks
     df['optimized'] = ["candidate" for _ in range(len(df))]
     return df
-
 
 def recommend_route(df_routes: pd.DataFrame, objective: str):
     if df_routes is None or len(df_routes) == 0:
@@ -366,7 +356,6 @@ def recommend_route(df_routes: pd.DataFrame, objective: str):
     df_routes.loc[idx, 'optimized'] = 'recommended'
     return idx, tag
 
-
 def _best_balanced_index(df: pd.DataFrame):
     cols = ["total_distance_km", "total_time_min", "total_cost_inr", "total_emissions_kg"]
     X = df[cols].values.astype(float)
@@ -378,7 +367,6 @@ def _best_balanced_index(df: pd.DataFrame):
     idx_rel = int(np.argmin(scores))
     tag = f"optimized:balanced(score={scores[idx_rel]:.3f})"
     return idx_rel, tag
-
 
 def _pareto_ranks(values: np.ndarray) -> List[int]:
     n = values.shape[0]
