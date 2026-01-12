@@ -4,13 +4,7 @@ import os
 import math
 import streamlit as st
 import pandas as pd
-
-from optimization import (
-    load_graph,
-    compute_candidate_routes,
-    recommend_route,
-    summarize_routes,
-)
+from optimization import load_graph, compute_candidate_routes, recommend_route, summarize_routes
 from map_utils import make_map
 from multimodal import load_flights, load_trains, summarize_mode, recommend
 
