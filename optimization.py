@@ -6,12 +6,14 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
-# If available, use osmnx to fetch real road networks
 try:
     import osmnx as ox
     OSMNX_AVAILABLE = True
 except Exception:
     OSMNX_AVAILABLE = False
+
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 DEFAULT_SPEED_KPH_BY_HIGHWAY = {
     "motorway": 90,
@@ -31,39 +33,60 @@ DEFAULT_SPEED_KPH_BY_HIGHWAY = {
 
 EPS = 1e-6  # strictly positive lower bound for edge weights
 
-def load_graph(origin: Tuple[float, float], dest: Tuple[float, float], use_offline_demo: bool=False):
-    """Load a road network graph. If offline demo, return a small synthetic graph.
-    Otherwise use OSMnx to fetch graph for a bbox around origin & dest.
+
+def _width_degrees(width_km: float, lat_deg: float) -> Tuple[float, float]:
+    # approximate conversion: 1 deg latitude ≈ 111 km; longitude scales by cos(latitude)
+    lat_deg_width = width_km / 111.0
+    lon_deg_width = width_km / (111.0 * max(0.2, abs(np.cos(np.radians(lat_deg)))))
+    return lat_deg_width, lon_deg_width
+
+
+def _build_corridor_polygon(origin: Tuple[float, float], dest: Tuple[float, float], width_km: float = 50.0, steps: int = 12):
+    lat1, lon1 = origin
+    lat2, lon2 = dest
+    polys = []
+    for t in np.linspace(0.0, 1.0, num=max(2, steps)):
+        lat = (1-t)*lat1 + t*lat2
+        lon = (1-t)*lon1 + t*lon2
+        dlat, dlon = _width_degrees(width_km, lat)
+        # simple rectangle around the interpolated point
+        poly = Polygon([
+            (lat-dlat, lon-dlon), (lat-dlat, lon+dlon), (lat+dlat, lon+dlon), (lat+dlat, lon-dlon)
+        ])
+        polys.append(poly)
+    return unary_union(polys)
+
+
+def load_graph(origin: Tuple[float, float], dest: Tuple[float, float], use_offline_demo: bool=False,
+               corridor_width_km: float = 50.0, corridor_steps: int = 12):
+    """Load a road network graph.
+    - If offline demo or OSMnx unavailable, return a synthetic MultiDiGraph.
+    - Else, build a narrow corridor polygon between origin and dest and fetch 'drive' network from OSM.
+    Returns (G, data_source_str)
     """
     if use_offline_demo or not OSMNX_AVAILABLE:
-        G = _build_demo_graph(origin, dest)
-    else:
-        # compute bbox covering origin & dest plus buffer
-        lat_min = min(origin[0], dest[0]) - 0.5
-        lat_max = max(origin[0], dest[0]) + 0.5
-        lon_min = min(origin[1], dest[1]) - 0.5
-        lon_max = max(origin[1], dest[1]) + 0.5
-        try:
-            G = ox.graph_from_bbox(lat_max, lat_min, lon_max, lon_min, network_type='drive')
-            G = ox.add_edge_lengths(G)
-        except Exception:
-            G = _build_demo_graph(origin, dest)
-    return G
+        return _build_demo_graph(origin, dest), "offline-demo"
+
+    try:
+        corridor = _build_corridor_polygon(origin, dest, width_km=corridor_width_km, steps=corridor_steps)
+        G = ox.graph_from_polygon(corridor, network_type='drive')
+        G = ox.add_edge_lengths(G)
+        return G, "osm-corridor"
+    except Exception:
+        return _build_demo_graph(origin, dest), "offline-demo-fallback"
+
 
 def _build_demo_graph(origin, dest):
-    """Construct a small synthetic road graph between origin & dest with example road names.
-    This is for offline demonstration only.
-    """
     G = nx.MultiDiGraph()
     nodes = {
-        1: {"y": origin[0], "x": origin[1]},  # Origin
-        2: {"y": 22.637, "x": 88.225},        # Kona Expressway
-        3: {"y": 22.517, "x": 87.982},        # NH16 entry
-        4: {"y": 21.943, "x": 86.738},        # Kharagpur area
-        5: {"y": 21.518, "x": 86.928},        # Balasore bypass
-        6: {"y": 20.948, "x": 86.092},        # Cuttack bypass
-        7: {"y": dest[0], "x": dest[1]},      # Destination
-        8: {"y": 22.575, "x": 88.346},        # Vidyasagar Setu Flyover
+        1: {"y": origin[0], "x": origin[1]},
+        2: {"y": 22.637, "x": 88.225},
+        3: {"y": 22.517, "x": 87.982},
+        4: {"y": 21.943, "x": 86.738},
+        5: {"y": 21.518, "x": 86.928},
+        6: {"y": 20.948, "x": 86.092},
+        7: {"y": dest[0], "x": dest[1]},
+        8: {"y": 22.575, "x": 88.346},
     }
     for nid, attrs in nodes.items():
         G.add_node(nid, **attrs)
@@ -78,7 +101,6 @@ def _build_demo_graph(origin, dest):
             bridge='yes' if is_flyover else None,
         )
 
-    # build demo paths
     add_edge(1, 8, 4.5, "Vidyasagar Setu Flyover", "primary", 60, is_flyover=True)
     add_edge(8, 2, 10.0, "Kona Expressway", "trunk", 80)
     add_edge(2, 3, 20.0, "NH16", "motorway", 90)
@@ -87,22 +109,20 @@ def _build_demo_graph(origin, dest):
     add_edge(5, 6, 100.0, "NH16", "motorway", 90)
     add_edge(6, 7, 25.0, "NH16", "motorway", 90)
 
-    # alternative via city roads
     add_edge(1, 2, 14.0, "Andul Road", "primary", 50)
     add_edge(2, 4, 180.0, "NH16", "motorway", 90)
     add_edge(4, 7, 120.0, "NH16", "motorway", 90)
 
-    # small roads route
     add_edge(1, 3, 30.0, "State Highway 4", "secondary", 45)
     add_edge(3, 5, 210.0, "Old Kolkata-Balasore Rd", "secondary", 40)
     add_edge(5, 7, 120.0, "Cuttack-BBSR Rd", "primary", 55)
 
-    # add reverse edges to allow bidirectional travel
     edges_to_copy = list(G.edges(keys=True, data=True))
     for u, v, k, d in edges_to_copy:
         G.add_edge(v, u, key=len(G.edges()), **d)
 
     return G
+
 
 def _edge_speed_kph(data, speed_model=None):
     speed = None
@@ -110,13 +130,11 @@ def _edge_speed_kph(data, speed_model=None):
         speed = float(data['maxspeed'])
     else:
         hw = data.get('highway')
-        if isinstance(hw, list):
-            hw = hw[0]
+        if isinstance(hw, list): hw = hw[0]
         speed = DEFAULT_SPEED_KPH_BY_HIGHWAY.get(hw, 35)
     if speed_model is not None:
         hw = data.get('highway')
-        if isinstance(hw, list):
-            hw = hw[0]
+        if isinstance(hw, list): hw = hw[0]
         is_bridge = 1 if (data.get('bridge') in ['yes', True]) else 0
         length_m = float(data.get('length', 0.0))
         X = pd.DataFrame([{ 'length_m': length_m, 'is_bridge': is_bridge, 'highway': hw }])
@@ -132,12 +150,11 @@ def _edge_speed_kph(data, speed_model=None):
             pass
     return speed
 
+
 def _edge_weight(data, fuel_price_inr_per_l, fuel_consumption_l_per_100km, emission_factor_g_co2_per_km,
                  prefer_highways, avoid_bridges_flyovers, speed_model):
-    """Return a strictly non-negative edge weight."""
     highway = data.get('highway')
-    if isinstance(highway, list):
-        highway = highway[0]
+    if isinstance(highway, list): highway = highway[0]
     is_bridge = (data.get('bridge') in ['yes', True])
     length_m = float(data.get('length', 0.0))
     speed_kph = _edge_speed_kph(data, speed_model)
@@ -147,25 +164,21 @@ def _edge_weight(data, fuel_price_inr_per_l, fuel_consumption_l_per_100km, emiss
 
     base_weight = travel_time_min + 0.001*length_m + 0.0002*cost_inr + 0.0002*emissions_kg
 
-    # multiplicative preferences (keep weight >= 0)
     if prefer_highways and highway in ["motorway", "trunk"]:
-        base_weight *= 0.97  # 3% preference
+        base_weight *= 0.97
     if avoid_bridges_flyovers and is_bridge:
-        base_weight *= 1.10  # 10% penalty
+        base_weight *= 1.10
 
     return max(base_weight, EPS)
 
+
 def _collapse_to_digraph(G_multi: nx.MultiDiGraph, weight_func) -> nx.DiGraph:
-    """Collapse a MultiDiGraph to a DiGraph by selecting the best parallel edge per (u,v)."""
     DG = nx.DiGraph()
-    # Copy nodes
     for n, attrs in G_multi.nodes(data=True):
         DG.add_node(n, **attrs)
-    # For each pair (u,v), choose the edge with minimum weight
     for u, v in G_multi.edges():
         edges = G_multi.get_edge_data(u, v)
-        if not edges:
-            continue
+        if not edges: continue
         best_data = None
         best_w = None
         for k, d in edges.items():
@@ -176,6 +189,7 @@ def _collapse_to_digraph(G_multi: nx.MultiDiGraph, weight_func) -> nx.DiGraph:
         if best_data is not None:
             DG.add_edge(u, v, **best_data)
     return DG
+
 
 def compute_candidate_routes(
     G,
@@ -189,7 +203,13 @@ def compute_candidate_routes(
     avoid_bridges_flyovers: bool = False,
     speed_model_path: Optional[str] = None,
 ) -> List[Dict]:
-    """Compute up to k candidate routes and annotate metrics & segments."""
+    """Compute up to k candidate routes and annotate metrics & segments.
+    Returns list of route dicts with per-edge segments and totals.
+    """
+    # If load_graph returned (G, source), adapt here: allow passing either graph alone or tuple.
+    data_source = None
+    if isinstance(G, tuple):
+        G, data_source = G
 
     # ML model
     speed_model = None
@@ -200,7 +220,6 @@ def compute_candidate_routes(
         except Exception:
             speed_model = None
 
-    # Weight function bound with parameters
     def weight_data(d):
         return _edge_weight(
             d,
@@ -212,12 +231,15 @@ def compute_candidate_routes(
             speed_model,
         )
 
-    # Collapse MultiDiGraph -> DiGraph and precompute numeric route_weight
-    DG = _collapse_to_digraph(G, weight_data)
-    for u, v, d in DG.edges(data=True):
+    # Collapse to DiGraph and precompute numeric route_weight
+    if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+        DG = _collapse_to_digraph(G, weight_data)
+    else:
+        DG = G
+    for _, _, d in DG.edges(data=True):
         d["route_weight"] = weight_data(d)
 
-    # Find nearest nodes on DG (works with OSMnx graphs too)
+    # Nearest nodes on DG
     try:
         origin_node = ox.nearest_nodes(DG, origin[1], origin[0]) if OSMNX_AVAILABLE else list(DG.nodes())[0]
         dest_node = ox.nearest_nodes(DG, dest[1], dest[0]) if OSMNX_AVAILABLE else list(DG.nodes())[-1]
@@ -225,7 +247,6 @@ def compute_candidate_routes(
         origin_node = list(DG.nodes())[0]
         dest_node = list(DG.nodes())[-1]
 
-    # k-shortest simple paths on DiGraph using numeric 'route_weight'
     try:
         paths_gen = nx.shortest_simple_paths(DG, origin_node, dest_node, weight='route_weight')
     except nx.NetworkXNoPath:
@@ -244,7 +265,6 @@ def compute_candidate_routes(
         highway_len_m = 0.0
 
         for u, v in zip(path[:-1], path[1:]):
-            # Attributes from collapsed DiGraph
             if DG.has_edge(u, v):
                 data = DG.get_edge_data(u, v)
             else:
@@ -252,8 +272,7 @@ def compute_candidate_routes(
 
             name = data.get('name') or 'Unnamed road'
             highway = data.get('highway')
-            if isinstance(highway, list):
-                highway = highway[0]
+            if isinstance(highway, list): highway = highway[0]
             length_m = float(data.get('length', 0.0))
             maxspeed_kph = _edge_speed_kph(data, speed_model)
             travel_time_min = (length_m/1000.0) / max(5.0, maxspeed_kph) * 60.0
@@ -261,7 +280,6 @@ def compute_candidate_routes(
             emissions_kg = (length_m/1000.0) * (emission_factor_g_co2_per_km/1000.0)
             is_flyover = (data.get('bridge') in ['yes', True]) or ('flyover' in str(name).lower())
 
-            # node coordinates
             u_lat = float(DG.nodes[u].get('y'))
             u_lon = float(DG.nodes[u].get('x'))
             v_lat = float(DG.nodes[v].get('y'))
@@ -301,9 +319,11 @@ def compute_candidate_routes(
             "num_segments": len(segments),
             "has_flyover": num_flyovers > 0,
             "highway_share_pct": (highway_len_m/total_length_m*100.0) if total_length_m>0 else 0.0,
+            "data_source": data_source or ("osm" if OSMNX_AVAILABLE else "demo"),
         })
 
     return routes
+
 
 def summarize_routes(routes: List[Dict]) -> pd.DataFrame:
     df = pd.DataFrame(routes)
@@ -314,6 +334,7 @@ def summarize_routes(routes: List[Dict]) -> pd.DataFrame:
     df['dominance_rank'] = ranks
     df['optimized'] = ["candidate" for _ in range(len(df))]
     return df
+
 
 def recommend_route(df_routes: pd.DataFrame, objective: str):
     if df_routes is None or len(df_routes) == 0:
@@ -345,6 +366,7 @@ def recommend_route(df_routes: pd.DataFrame, objective: str):
     df_routes.loc[idx, 'optimized'] = 'recommended'
     return idx, tag
 
+
 def _best_balanced_index(df: pd.DataFrame):
     cols = ["total_distance_km", "total_time_min", "total_cost_inr", "total_emissions_kg"]
     X = df[cols].values.astype(float)
@@ -356,6 +378,7 @@ def _best_balanced_index(df: pd.DataFrame):
     idx_rel = int(np.argmin(scores))
     tag = f"optimized:balanced(score={scores[idx_rel]:.3f})"
     return idx_rel, tag
+
 
 def _pareto_ranks(values: np.ndarray) -> List[int]:
     n = values.shape[0]
